@@ -4,7 +4,11 @@ from logging import getLogger
 from math import ceil
 from typing import TypeVar, NamedTuple, Optional
 
-from PIL import Image, ImageChops, ImageDraw, ImageFont
+from PIL import Image as PILImage
+from PIL import ImageChops as PILImageChops
+from PIL import ImageDraw as PILImageDraw
+from PIL import ImageFont as PILImageFont
+
 try:
     from qrcode import QRCode as _QRCode
     from qrcode.constants import ERROR_CORRECT_L, ERROR_CORRECT_M, ERROR_CORRECT_H, ERROR_CORRECT_Q
@@ -22,9 +26,9 @@ logger = getLogger(__name__)
 
 
 def crop(im):
-    bg = Image.new(im.mode, im.size, im.getpixel((0, 0)))
-    diff = ImageChops.difference(im, bg)
-    diff = ImageChops.add(diff, diff, 2.0, -100)
+    bg = PILImage.new(im.mode, im.size, im.getpixel((0, 0)))
+    diff = PILImageChops.difference(im, bg)
+    diff = PILImageChops.add(diff, diff, 2.0, -100)
     bbox = diff.getbbox()
     if bbox:
         return im.crop(bbox)
@@ -41,7 +45,7 @@ class Padding(NamedTuple):
 
 class Item(ABC):
     @abstractmethod
-    def render(self) -> Image:
+    def render(self) -> PILImage:
         ...
 
 
@@ -61,18 +65,18 @@ class Text(Item):
             raise ValueError("Negative padding is not supported: {padding}")
         self.padding = padding
 
-    def render(self) -> Image:
+    def render(self) -> PILImage:
         iheight = self.height - self.padding.top - self.padding.bottom
         if self.font_size is None:
             font_size = self._calc_font_size(iheight)
             logger.debug(f"text: {self.text}, calculated font size: {font_size}")
         else:
             font_size = self.font_size
-        font = ImageFont.truetype(self.font_path, font_size, self.font_index)
+        font = PILImageFont.truetype(self.font_path, font_size, self.font_index)
         text_x, _ = font.getsize(self.text)
-        image = Image.new("1", (self.padding.left + text_x + self.padding.right, self.height), "white")
-        fimage = Image.new("1", font.getsize(self.text), "white")
-        draw = ImageDraw.Draw(fimage)
+        image = PILImage.new("1", (self.padding.left + text_x + self.padding.right, self.height), "white")
+        fimage = PILImage.new("1", font.getsize(self.text), "white")
+        draw = PILImageDraw.Draw(fimage)
         draw.text((0, 0), self.text, "black", font)
         fimage = crop(fimage)
         image.paste(fimage, (self.padding.left, self.padding.top))
@@ -82,9 +86,9 @@ class Text(Item):
         lower = 1
         upper = 1
         while True:
-            font = ImageFont.truetype(self.font_path, upper)
-            image = Image.new("1", font.getsize(self.text), "white")
-            draw = ImageDraw.Draw(image)
+            font = PILImageFont.truetype(self.font_path, upper)
+            image = PILImage.new("1", font.getsize(self.text), "white")
+            draw = PILImageDraw.Draw(image)
             draw.text((0, 0), self.text, "black", font)
             font_height = crop(image).size[1]
             if font_height >= height:
@@ -93,9 +97,9 @@ class Text(Item):
             upper *= 2
         while True:
             test = ceil((upper+lower)/2)
-            font = ImageFont.truetype(self.font_path, test)
-            image = Image.new("1", font.getsize(self.text), "white")
-            draw = ImageDraw.Draw(image)
+            font = PILImageFont.truetype(self.font_path, test)
+            image = PILImage.new("1", font.getsize(self.text), "white")
+            draw = PILImageDraw.Draw(image)
             draw.text((0, 0), self.text, "black", font)
             font_height = crop(image).size[1]
             if upper - lower <= 1:
@@ -106,6 +110,29 @@ class Text(Item):
                 lower = test
             else:
                 return test
+
+class Image(Item):
+    """
+    The representation of an image item to add images to a label.
+    """
+    def __init__(self, height: int, im_path: str):
+        """
+        Initialize an image item.
+        :param height:  The height of the image in pixels.
+        :param im_path: The file path of the image.
+        """
+        self.height = height
+        self.im_path = im_path
+
+
+    def render(self) -> PILImage:
+        image = PILImage.open(self.im_path)
+
+        image_width, image_height = image.size
+        self.width = int(image_width * (self.height / image_height))
+        image = image.resize((self.width, self.height), PILImage.Resampling.LANCZOS)
+
+        return image
 
 
 class QRCode(Item):
@@ -120,7 +147,7 @@ class QRCode(Item):
         self._box_size = box_size
         self._border = border
 
-    def render(self) -> Image:
+    def render(self) -> PILImage:
         if self._box_size is None:
             box_size = 2
         else:
@@ -155,7 +182,7 @@ class QRCode(Item):
         logger.debug(f"qrcode: {self._data}, final box_size: {probe_box_size - 1}, EC: {error_correction}")
 
         rest = self._width - qr_image.size[1]
-        image = Image.new("1", (qr_image.size[0], self._width), "white")
+        image = PILImage.new("1", (qr_image.size[0], self._width), "white")
         image.paste(qr_image, (0, rest // 2))
 
         return image
@@ -168,19 +195,19 @@ class Box(Item):
         self._vertical = vertical
         self._left_padding = left_padding
 
-    def render(self) -> Image:
+    def render(self) -> PILImage:
         rendered_images = [item.render() for item in self.items]
         if self._vertical:
             length = max([rendered_image.size[0] for rendered_image in rendered_images]) + self._left_padding
             assert self.height == sum([rendered_image.size[1] for rendered_image in rendered_images])
-            image = Image.new("1", (length, self.height), "white")
+            image = PILImage.new("1", (length, self.height), "white")
             xpos = 0
             for rendered_image in rendered_images:
                 image.paste(rendered_image, (self._left_padding, xpos))
                 xpos += rendered_image.size[1]
         else:
             length = sum([rendered_image.size[0] for rendered_image in rendered_images]) + self._left_padding
-            image = Image.new("1", (length, self.height), "white")
+            image = PILImage.new("1", (length, self.height), "white")
             ypos = self._left_padding
             for rendered_image in rendered_images:
                 image.paste(rendered_image, (ypos, 0))
@@ -224,7 +251,7 @@ class Flag(BasePage):
         rendered_images.insert(1, line_image)
         positions = [0, image_max_length + white_spacing, line_length + white_spacing]
 
-        image = Image.new("1", (length, height), "white")
+        image = PILImage.new("1", (length, height), "white")
         ypos = 0
         for rendered_image, position in zip(rendered_images, positions):
             ypos += position
